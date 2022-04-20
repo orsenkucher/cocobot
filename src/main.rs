@@ -143,9 +143,6 @@ impl NameAction {
     }
 }
 
-// type ModeDialogue = Dialogue<ModeState, ErasedStorage<ModeState>>;
-// type ModeStorage = std::sync::Arc<ErasedStorage<ModeState>>;
-
 #[derive(BotCommands, Clone)]
 #[command(rename = "lowercase", description = "These commands are supported:")]
 enum Command {
@@ -201,60 +198,12 @@ async fn main() {
         .unwrap()
         .erase();
 
-    // let mode_storage: ModeStorage = SqliteStorage::open("db.sqlite", Json)
-    //     .await
-    //     .unwrap()
-    //     .erase();
-
-    let handler = dptree::entry()
-        // callbacks
-        .branch(
-            Update::filter_callback_query()
-                .enter_dialogue::<CallbackQuery, ErasedStorage<State>, State>()
-                .branch(teloxide::handler![State::Language(last)].endpoint(language_callback))
-                .branch(
-                    teloxide::handler![State::ReceiveMode { user, last }].endpoint(mode_callback),
-                )
-                .branch(
-                    teloxide::handler![State::ConfirmName { lang, name, msg_id }]
-                        .endpoint(confirm_name_callback),
-                ),
-        )
-        .branch(
-            Update::filter_message()
-                // commands
-                .branch(
-                    dptree::entry()
-                        .filter_command::<Command>()
-                        .endpoint(comands),
-                )
-                // maintainer commands
-                .branch(maintainer_commands())
-                // text dialogue
-                .branch(
-                    Message::filter_text()
-                        .enter_dialogue::<Message, ErasedStorage<State>, State>()
-                        .branch(teloxide::handler![State::Start].endpoint(start))
-                        .branch(
-                            teloxide::handler![State::Language(last)].endpoint(language_message),
-                        )
-                        .branch(
-                            teloxide::handler![State::ReceiveName(lang, msg_id)]
-                                .endpoint(name_message),
-                        )
-                        .branch(
-                            teloxide::handler![State::ConfirmName { lang, name, msg_id }]
-                                .endpoint(confirm_name_message),
-                        )
-                        .branch(
-                            teloxide::handler![State::ReceiveMode { user, last }]
-                                .endpoint(mode_message),
-                        )
-                        .branch(
-                            teloxide::handler![State::SelectedMode { user }].endpoint(mode_message),
-                        ),
-                ),
-        );
+    let handler = dptree::entry().branch(callback_branch()).branch(
+        Update::filter_message()
+            .branch(command_branch())
+            .branch(maintainer_branch())
+            .branch(text_branch()),
+    );
 
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![storage, parameters])
@@ -270,13 +219,45 @@ async fn main() {
         .await;
 }
 
-// TODO: try to refactor
-fn maintainer_commands() -> dptree::Handler<
+type MyHandler = dptree::Handler<
     'static,
     DependencyMap,
     HandlerResult,
     teloxide::dispatching::DpHandlerDescription,
-> {
+>;
+
+fn command_branch() -> MyHandler {
+    dptree::entry()
+        .filter_command::<Command>()
+        .endpoint(comands)
+}
+
+fn text_branch() -> MyHandler {
+    Message::filter_text()
+        .enter_dialogue::<Message, ErasedStorage<State>, State>()
+        .branch(teloxide::handler![State::Start].endpoint(start))
+        .branch(teloxide::handler![State::Language(last)].endpoint(language_message))
+        .branch(teloxide::handler![State::ReceiveName(lang, msg_id)].endpoint(name_message))
+        .branch(
+            teloxide::handler![State::ConfirmName { lang, name, msg_id }]
+                .endpoint(confirm_name_message),
+        )
+        .branch(teloxide::handler![State::ReceiveMode { user, last }].endpoint(mode_message))
+        .branch(teloxide::handler![State::SelectedMode { user }].endpoint(mode_message))
+}
+
+fn callback_branch() -> MyHandler {
+    Update::filter_callback_query()
+        .enter_dialogue::<CallbackQuery, ErasedStorage<State>, State>()
+        .branch(teloxide::handler![State::Language(last)].endpoint(language_callback))
+        .branch(teloxide::handler![State::ReceiveMode { user, last }].endpoint(mode_callback))
+        .branch(
+            teloxide::handler![State::ConfirmName { lang, name, msg_id }]
+                .endpoint(confirm_name_callback),
+        )
+}
+
+fn maintainer_branch() -> MyHandler {
     dptree::filter(|msg: Message, cfg: ConfigParameters| {
         msg.from()
             .map(|user| user.id.0 == cfg.bot_maintainer)
