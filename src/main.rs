@@ -3,15 +3,15 @@ use if_chain::if_chain;
 use rand::Rng;
 use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
 use teloxide::adaptors::DefaultParseMode;
-use teloxide::dispatching2::dialogue::GetChatId;
-use teloxide::dispatching2::dialogue::{serializer::Json, ErasedStorage, SqliteStorage, Storage};
-use teloxide::dispatching2::{MessageFilterExt, UpdateFilterExt};
-use teloxide::macros::DialogueState;
+use teloxide::dispatching::dialogue::{
+    serializer::Json, ErasedStorage, GetChatId, SqliteStorage, Storage,
+};
+use teloxide::dispatching::{MessageFilterExt, UpdateFilterExt};
 use teloxide::payloads::SendMessageSetters;
-use teloxide::prelude2::*;
+use teloxide::prelude::*;
 use teloxide::requests::RequesterExt;
 use teloxide::types::{Chat, InlineKeyboardButton, InlineKeyboardMarkup, Me, ParseMode};
-use teloxide::utils::command::BotCommand;
+use teloxide::utils::command::BotCommands;
 
 use std::str::FromStr;
 
@@ -21,32 +21,23 @@ type MyBot = AutoSend<DefaultParseMode<Bot>>;
 type MyDialogue = Dialogue<State, ErasedStorage<State>>;
 type MyStorage = std::sync::Arc<ErasedStorage<State>>;
 
-#[derive(DialogueState, Clone, serde::Serialize, serde::Deserialize, Debug)]
-#[handler_out[HandlerResult]]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum State {
-    #[handler(start)]
     Start,
-
-    #[handler(language_message)]
     Language(LastFlag),
-
-    #[handler(name_message)]
     ReceiveName(Language, i32),
-
-    #[handler(confirm_name_message)]
     ConfirmName {
         lang: Language,
         name: String,
         msg_id: i32,
     },
-
-    #[handler(mode_message)]
-    ReceiveMode { user: User, last: LastFlag },
-
-    #[handler(mode_message)]
-    SelectedMode { user: User },
-    // #[handler(receive_location)]
-    // ReceiveLocation { full_name: String, age: u8 },
+    ReceiveMode {
+        user: User,
+        last: LastFlag,
+    },
+    SelectedMode {
+        user: User,
+    },
 }
 
 impl Default for State {
@@ -155,26 +146,7 @@ impl NameAction {
 // type ModeDialogue = Dialogue<ModeState, ErasedStorage<ModeState>>;
 // type ModeStorage = std::sync::Arc<ErasedStorage<ModeState>>;
 
-// #[derive(DialogueState, Clone, serde::Serialize, serde::Deserialize)]
-// #[handler_out[HandlerResult]]
-// pub enum ModeState {
-//     #[handler(start2)]
-//     Start,
-
-//     #[handler(spotify)]
-//     Spotify,
-
-//     #[handler(unselected)]
-//     Unselected,
-// }
-
-// impl Default for ModeState {
-//     fn default() -> Self {
-//         Self::Start
-//     }
-// }
-
-#[derive(BotCommand, Clone)]
+#[derive(BotCommands, Clone)]
 #[command(rename = "lowercase", description = "These commands are supported:")]
 enum Command {
     #[command(description = "display this message.")]
@@ -187,14 +159,14 @@ enum Command {
     UsernameAndAge { username: String, age: u8 },
 }
 
-#[derive(BotCommand, Clone)]
+#[derive(BotCommands, Clone)]
 #[command(rename = "lowercase", description = "Callback commands")]
 enum CallbackCommand {
     #[command(description = "resend keyboard message")]
     Resend,
 }
 
-#[derive(BotCommand, Clone)]
+#[derive(BotCommands, Clone)]
 #[command(rename = "lowercase", description = "Maintainer commands")]
 enum MaintainerCommand {
     #[command(parse_with = "split", description = "generate a number within range")]
@@ -207,7 +179,7 @@ enum MaintainerCommand {
 
 #[derive(Clone)]
 struct ConfigParameters {
-    bot_maintainer: i64,
+    bot_maintainer: u64,
     maintainer_username: Option<String>,
 }
 
@@ -234,104 +206,55 @@ async fn main() {
     //     .unwrap()
     //     .erase();
 
-    let handler =
-        dptree::entry()
-            .branch(
-                Update::filter_callback_query()
-                    .enter_dialogue::<CallbackQuery, ErasedStorage<State>, State>()
-                    .branch(
-                        dptree::filter(|state: State| matches!(state, State::Language(_)))
-                            .endpoint(language_callback),
-                    )
-                    .branch(
-                        dptree::filter(|state: State| matches!(state, State::ReceiveMode { .. }))
-                            .endpoint(mode_callback),
-                    )
-                    .branch(
-                        dptree::filter(|state: State| matches!(state, State::ConfirmName { .. }))
-                            .endpoint(confirm_name_callback),
-                    ),
-            )
-            .branch(
-                Update::filter_message()
-                    .branch(
-                        dptree::entry()
-                            .filter_command::<Command>()
-                            .endpoint(comands),
-                    )
-                    .branch(
-                        dptree::filter(|msg: Message, cfg: ConfigParameters| {
-                            msg.from()
-                                .map(|user| user.id == cfg.bot_maintainer)
-                                .unwrap_or_default()
-                        })
-                        .filter_command::<MaintainerCommand>()
-                        .endpoint(
-                            |bot: MyBot,
-                             msg: Message,
-                             cmd: MaintainerCommand,
-                             storage: MyStorage| async move {
-                                match cmd {
-                                    MaintainerCommand::Rand { from, to } => {
-                                        let mut rng = rand::rngs::OsRng::default();
-                                        let value = rng.gen_range(from..=to);
-                                        bot.send_message(
-                                            msg.chat.id,
-                                            format!(
-                                                "Hello maintainer! Your rand value: {}",
-                                                &value
-                                            ),
-                                        )
-                                        .await?;
-                                    }
-                                    MaintainerCommand::Reset => {
-                                        MyDialogue::new(storage, msg.chat.id).reset().await?;
-                                    }
-                                }
-                                Ok(())
-                            },
+    let handler = dptree::entry()
+        // callbacks
+        .branch(
+            Update::filter_callback_query()
+                .enter_dialogue::<CallbackQuery, ErasedStorage<State>, State>()
+                .branch(teloxide::handler![State::Language(last)].endpoint(language_callback))
+                .branch(
+                    teloxide::handler![State::ReceiveMode { user, last }].endpoint(mode_callback),
+                )
+                .branch(
+                    teloxide::handler![State::ConfirmName { lang, name, msg_id }]
+                        .endpoint(confirm_name_callback),
+                ),
+        )
+        .branch(
+            Update::filter_message()
+                // commands
+                .branch(
+                    dptree::entry()
+                        .filter_command::<Command>()
+                        .endpoint(comands),
+                )
+                // maintainer commands
+                .branch(maintainer_commands())
+                // text dialogue
+                .branch(
+                    Message::filter_text()
+                        .enter_dialogue::<Message, ErasedStorage<State>, State>()
+                        .branch(teloxide::handler![State::Start].endpoint(start))
+                        .branch(
+                            teloxide::handler![State::Language(last)].endpoint(language_message),
+                        )
+                        .branch(
+                            teloxide::handler![State::ReceiveName(lang, msg_id)]
+                                .endpoint(name_message),
+                        )
+                        .branch(
+                            teloxide::handler![State::ConfirmName { lang, name, msg_id }]
+                                .endpoint(confirm_name_message),
+                        )
+                        .branch(
+                            teloxide::handler![State::ReceiveMode { user, last }]
+                                .endpoint(mode_message),
+                        )
+                        .branch(
+                            teloxide::handler![State::SelectedMode { user }].endpoint(mode_message),
                         ),
-                    )
-                    .branch(
-                        Message::filter_text()
-                            .enter_dialogue::<Message, ErasedStorage<State>, State>()
-                            // .enter_dialogue::<Message, ErasedStorage<ModeState>, ModeState>()
-                            .dispatch_by::<State>(),
-                    ),
-                // .branch(
-                //     Message::filter_text().enter_dialogue::<Message, ErasedStorage<State>, State>().chain(
-                //         dptree::filter(|msg:Message, dial: MyDialogue| {
-                //             log::warn!("MY DIAL");
-                //             // let (tx, rx) = channel::bounded(1);
-                //             let (tx, rx) =  mpsc::channel();
-                //             tokio::spawn(async move {
-                //                      let cur=  dial.get().await.unwrap();
-                //          log::warn!("CUR: {:?}", cur);
-                //                 let _ = tx.send(cur);
-                //             });
-                //          let res=    rx.recv();
-                //         match res {
-                //             Ok(Some(s)) if s == State::Start =>{
-                //                 false
-                //             }
-                //             _ =>true
-                //         }
-                //     })
-                //         .enter_dialogue::<Message, ErasedStorage<State>, State>()
-                //         .dispatch_by::<State>()
-                //     )
-                //         // .chain(
-                //         //     Message::filter_text()
-                //         //         .enter_dialogue::<Message, ErasedStorage<ModeState>, ModeState>()
-                //         //         .dispatch_by::<ModeState>(),
-                //         // ),
-                // )
-                // // .chain(
-                // //     Message::filter_text()
-                // //         .enter_dialogue::<Message, ErasedStorage<ModeState>, ModeState>()
-                // //         .dispatch_by::<ModeState>(),
-                // // )
-            );
+                ),
+        );
 
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![storage, parameters])
@@ -347,23 +270,45 @@ async fn main() {
         .await;
 }
 
+// TODO: try to refactor
+fn maintainer_commands() -> dptree::Handler<
+    'static,
+    DependencyMap,
+    HandlerResult,
+    teloxide::dispatching::DpHandlerDescription,
+> {
+    dptree::filter(|msg: Message, cfg: ConfigParameters| {
+        msg.from()
+            .map(|user| user.id.0 == cfg.bot_maintainer)
+            .unwrap_or_default()
+    })
+    .filter_command::<MaintainerCommand>()
+    .endpoint(
+        |bot: MyBot, msg: Message, cmd: MaintainerCommand, storage: MyStorage| async move {
+            match cmd {
+                MaintainerCommand::Rand { from, to } => {
+                    let mut rng = rand::rngs::OsRng::default();
+                    let value = rng.gen_range(from..=to);
+                    bot.send_message(
+                        msg.chat.id,
+                        format!("Hello maintainer! Your rand value: {}", &value),
+                    )
+                    .await?;
+                }
+                MaintainerCommand::Reset => {
+                    MyDialogue::new(storage, msg.chat.id).reset().await?;
+                }
+            }
+            Ok(())
+        },
+    )
+}
+
 async fn start(bot: MyBot, msg: Message, dialogue: MyDialogue, me: Me) -> HandlerResult {
-    // let ans = msg.text().unwrap();
     let bot_name = me.user.username.unwrap();
     log::info!("bot name: {}", bot_name);
-
-    // match Command::parse(ans, bot_name) {
-    //     // Ok(cmd) => answer(bot, msg, cmd).await?,
-    //     Ok(_) => {}
-    //     Err(_) => {
-    //         bot.send_message(msg.chat.id, "Let's start! What's your full name?")
-    //             .await?;
-    //         dialogue.update(State::ReceiveFullName).await?;
-    //     }
-    // }
     send_languages(&bot, &msg).await?;
     dialogue.update(State::Language(LastFlag(true))).await?;
-
     Ok(())
 }
 
@@ -372,33 +317,6 @@ async fn send_languages(bot: &MyBot, msg: &Message) -> HandlerResult {
     bot.send_message(msg.chat.id, format!("Let's start! What's your language?"))
         .reply_markup(keyboard)
         .await?;
-    Ok(())
-}
-
-// async fn start2(
-//     bot: AutoSend<Bot>,
-//     msg: Message,
-//     dialogue: ModeDialogue,
-//     dialogue2: MyDialogue,
-//     me: Me,
-// ) -> HandlerResult {
-//     log::warn!("inside start2");
-//     bot.send_message(msg.chat.id, "Let's start! What's your name?")
-//         .await?;
-//     // dialogue.update(ModeState::?).await?;
-//     log::info!("updating name dialogue");
-//     dialogue2.update(State::ReceiveName(Language::EN)).await?;
-//     // dialogue.reset().await?;
-//     Ok(())
-// }
-
-async fn spotify(bot: MyBot, msg: Message) -> HandlerResult {
-    log::info!("SPOTIFY");
-    Ok(())
-}
-
-async fn unselected(bot: MyBot, msg: Message) -> HandlerResult {
-    log::info!("UNSELECTED");
     Ok(())
 }
 
@@ -657,14 +575,14 @@ async fn comands(bot: MyBot, msg: Message, cmd: Command, cfg: ConfigParameters) 
     match cmd {
         Command::Help => {
             log::info!("help command for {}", msg.chat.id);
-            let text = if msg.from().unwrap().id == cfg.bot_maintainer {
+            let text = if msg.from().unwrap().id.0 == cfg.bot_maintainer {
                 format!(
                     "{}\n{}",
                     Command::descriptions(),
                     MaintainerCommand::descriptions()
                 )
             } else {
-                Command::descriptions()
+                Command::descriptions().to_string()
             };
             bot.send_message(msg.chat.id, text).await?;
         }
